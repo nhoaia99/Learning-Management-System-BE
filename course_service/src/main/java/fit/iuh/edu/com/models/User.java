@@ -12,6 +12,7 @@ import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.DynamoDbParti
 
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Set;
 
 @Data
 @DynamoDbBean
@@ -24,6 +25,7 @@ public class User {
     private LocalDate birthday;
     private String gender;
     private List<String> groups;
+    private Set<String> shoppingList;
     @DynamoDbPartitionKey
     @DynamoDbAttribute("id")
     public String getId() {

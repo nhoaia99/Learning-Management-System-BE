@@ -1,5 +1,6 @@
 package fit.iuh.edu.com.models;
 
+import fit.iuh.edu.com.converter.GenderConverter;
 import fit.iuh.edu.com.converter.LocalDateConverter;
 import fit.iuh.edu.com.enums.AccountStatus;
 import fit.iuh.edu.com.enums.Gender;
@@ -45,4 +46,8 @@ public class User {
         return birthday;
     }
 
+    @DynamoDbConvertedBy(GenderConverter.class)
+    public Gender getGender() {
+        return gender;
+    }
 }

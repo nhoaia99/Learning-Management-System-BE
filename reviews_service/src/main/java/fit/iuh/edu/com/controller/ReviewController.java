@@ -37,6 +37,14 @@ public class ReviewController {
         this.reviewServiceBL = reviewServiceBL;
         this.userServiceBL = userServiceBL;
     }
+    @GetMapping("/reviewed")
+    public ResponseEntity<?> reviewed(@RequestParam("courseId") String courseId) {
+        Map<String, Object> response = new HashMap<String, Object>();
+        response.put("code",200);
+        response.put("message","success");
+        response.put("data",reviewServiceBL.getReviewedByCourseId(courseId));
+        return ResponseEntity.status(HttpStatus.OK).body(response);
+    }
 
     @PostMapping()
     public ResponseEntity<?> addReview(@Valid ReviewRequestAdd reviewRequestAdd, BindingResult bindingResult) throws IOException, ExecutionException, InterruptedException {
@@ -45,33 +53,46 @@ public class ReviewController {
             response.put("errors", bindingResult.getAllErrors());
             return ResponseEntity.badRequest().body(response);
         }
-        ResponseEntity<?> resultCheckFileImage = checkFileImage(reviewRequestAdd.getFileImage());
-        if(resultCheckFileImage != null){
-            return resultCheckFileImage;
-        }
+//        ResponseEntity<?> resultCheckFileImage = checkFileImage(reviewRequestAdd.getFileImage());
+//        if(resultCheckFileImage != null){
+//            return resultCheckFileImage;
+//        }
         if(!reviewServiceBL.checkDependency(reviewRequestAdd.getCourseId())){
             response.put("errors", "Review dependency class errors");
             return ResponseEntity.badRequest().body(response);
         }
-        String urlAvt = bucketServiceBL.putObjectToBucket(bucketName, reviewRequestAdd.getFileImage(),"images");
+        if(reviewServiceBL.getReviewedByCourseId(reviewRequestAdd.getCourseId())!= null){
+            response.put("errors", "The course has been evaluated");
+            return ResponseEntity.badRequest().body(response);
+        }
+        User user = userServiceBL.getUser(SecurityContextHolder.getContext().getAuthentication().getName());
+//        String urlAvt = bucketServiceBL.putObjectToBucket(bucketName, reviewRequestAdd.getFileImage(),"images");
         Review review = Review
                 .builder()
                 .content(reviewRequestAdd.getContent())
                 .review(reviewRequestAdd.getReview())
                 .courseId(reviewRequestAdd.getCourseId())
-                .urlImage(urlAvt)
-                .userId(SecurityContextHolder.getContext().getAuthentication().getName())
+//                .urlImage(urlAvt)
+                .userId(user.getId())
+                .urlAvt(user.getUrlImage())
+                .userName(user.getUserName())
                 .build();
-        response.put("review", reviewServiceBL.add(review));
+        response.put("data", reviewServiceBL.add(review));
         response.put("code",200);
         response.put("message","success");
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
     @GetMapping(path = "/get-reviews-by-courseId")
-    public ResponseEntity<?> getReviewsByCourseId(@RequestParam("courseId") String courseId) {
+    public ResponseEntity<?> getReviewsByCourseId(@RequestParam("courseId") String courseId, @RequestParam(value = "review", required = false) Integer review ) {
+        List<Review> reviews = new ArrayList<>();
+        if(review != null && review > 0 && review <= 5) {
+            reviews = reviewServiceBL.getReviewsByCourseId(courseId, review);
+        }else{
+            reviews = reviewServiceBL.getReviewsBeforeNow(courseId);
+        }
         Map<String, Object> response = new HashMap<>();
         response.put("code",200);
-        response.put("review", reviewServiceBL.getReviewsByCourseId(courseId));
+        response.put("data", reviews);
         response.put("message","success");
         return ResponseEntity.status(HttpStatus.OK).body(response);
     }
@@ -80,7 +101,7 @@ public class ReviewController {
         User teacher = userServiceBL.getUser(teacherId);
         Map<String, Object> response = new HashMap<>();
         response.put("code",200);
-        response.put("review", reviewServiceBL.getReviewsByTeacherId(teacher));
+        response.put("data", reviewServiceBL.getReviewsByTeacherId(teacher));
         response.put("message","success");
         return ResponseEntity.status(HttpStatus.OK).body(response);
     }

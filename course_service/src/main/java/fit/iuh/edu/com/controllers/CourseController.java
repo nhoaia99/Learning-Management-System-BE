@@ -1,15 +1,21 @@
 package fit.iuh.edu.com.controllers;
 
 import fit.iuh.edu.com.dtos.*;
+import fit.iuh.edu.com.models.Category;
 import fit.iuh.edu.com.models.Course;
 import fit.iuh.edu.com.models.User;
+import fit.iuh.edu.com.services.BL.CategoryServiceBL;
+import fit.iuh.edu.com.services.BL.OrderDetailBL;
+import fit.iuh.edu.com.services.BL.ShoppingCartBL;
 import fit.iuh.edu.com.services.BL.UserServiceBL;
 import fit.iuh.edu.com.services.Impl.BucketServiceImpl;
 import fit.iuh.edu.com.services.Impl.CourseServiceImpl;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotNull;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
@@ -29,6 +35,12 @@ public class CourseController {
     private static final List<String> ALLOWED_FILE_TYPES_IMAGE = Arrays.asList("image/jpeg", "image/png");
     private static final List<String> ALLOWED_EXTENSIONS_IMAGE = Arrays.asList("jpg", "jpeg", "png");
     private static final long MAX_SIZE_IMAGE = 5 * 1024 * 1024; // 5MB
+
+    private static final List<String> ALLOWED_FILE_TYPES_VIDEO = Arrays.asList("video/mp4", "video/avi", "video/mpeg");
+    private static final List<String> ALLOWED_EXTENSIONS_VIDEO = Arrays.asList("mp4", "avi", "mpeg");
+    private static final long MAX_SIZE_VIDEO_INTRO = 50 * 1024 * 1024; // 10MB
+
+
     @Value("${aws.s3.bucket.name}")
     private String bucketName;
     @Autowired
@@ -37,7 +49,68 @@ public class CourseController {
     private UserServiceBL userServiceBL;
     @Autowired
     private CourseServiceImpl courseServiceImpl;
+    @Autowired
+    private CategoryServiceBL categoryServiceBL;
 
+    @Autowired
+    private ShoppingCartBL shoppingCartBL;
+    @Autowired
+    private OrderDetailBL orderDetailBL;
+
+    @PreAuthorize("hasRole('STUDENT')")
+    @PostMapping(value="/shopping-cart", consumes = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<?> shoppingCartAdd(@Valid @RequestBody ShoppingCartRequest request, BindingResult bindingResult ){
+        Map<String, Object> response = new HashMap<>();
+        System.out.println("Received courseId: " + request.getCourseId());
+        if(bindingResult.hasErrors()){
+            response.put("code",400);
+            response.put("status","error");
+            response.put("message",bindingResult.getAllErrors());
+            return ResponseEntity.badRequest().body(response);
+        }
+        if(orderDetailBL.checkCoursePurchased(request.getCourseId())){
+            response.put("code",400);
+            response.put("status","error");
+            response.put("message","Course have purchased");
+            return ResponseEntity.badRequest().body(response);
+        }
+        shoppingCartBL.addCourse(request.getCourseId());
+
+        response.put("code",200);
+        response.put("status","success");
+        return ResponseEntity.ok(response);
+    }
+    @GetMapping("/check-course-purchase")
+    public ResponseEntity<?> checkCoursePurchase(@RequestParam("courseId") String courseId){
+        Map<String, Object> response = new HashMap<>();
+        response.put("code",200);
+        response.put("status","success");
+        response.put("purchased", orderDetailBL.checkCoursePurchased(courseId));
+        return ResponseEntity.ok(response);
+    }
+    @GetMapping("/shopping-cart")
+    public ResponseEntity<?> shoppingList(){
+        Map<String, Object> response = new HashMap<>();
+        response.put("code",200);
+        response.put("status","success");
+        response.put("data", shoppingCartBL.getShoppingCart());
+        return ResponseEntity.ok(response);
+    }
+    @DeleteMapping("/shopping-cart")
+    public ResponseEntity<?> deleteItem(@Valid @RequestBody ShoppingCartRequest request, BindingResult bindingResult ){
+        Map<String, Object> response = new HashMap<>();
+        if(bindingResult.hasErrors()){
+            response.put("code",400);
+            response.put("status","error");
+            response.put("message",bindingResult.getAllErrors());
+            return ResponseEntity.badRequest().body(response);
+        }
+        shoppingCartBL.removeCourse(request.getCourseId());
+
+        response.put("code",200);
+        response.put("status","success");
+        return ResponseEntity.ok(response);
+    }
     @GetMapping
     public ResponseEntity<?> getCourseDetailById(@RequestParam("id") String courseId){
         Course course = courseServiceImpl.getCourseDetailById(courseId);
@@ -45,9 +118,22 @@ public class CourseController {
         response.put("code",200);
         response.put("data",course);
         response.put("message", "success");
-        return ResponseEntity.ok(course);
+        return ResponseEntity.ok(response);
     }
+    @PostMapping("/add-image")
+    public ResponseEntity<?> addImage(@RequestParam("image") MultipartFile image) throws IOException {
+        Map<String, Object> response = new HashMap<>();
 
+        ResponseEntity<?> resultCheckFileImage = checkFileImage(image);
+        if(resultCheckFileImage != null){
+            return resultCheckFileImage;
+        }
+        String urlAvt = bucketServiceBL.putObjectToBucket(bucketName, image,"images");
+        response.put("code",200);
+        response.put("url",urlAvt);
+        response.put("message", "success");
+        return ResponseEntity.ok(response);
+    }
     @PutMapping
     public ResponseEntity<?> updateCourse(@Valid CourseRequestUpdate courseRequestUpdate, BindingResult bindingResult) throws IOException {
         Map<String, Object> response = new HashMap<>();
@@ -59,26 +145,38 @@ public class CourseController {
         if(courseServiceImpl.checkCourseBeforeUpdate(courseRequestUpdate.getId())){
             Course updatedCourseResponse = null;
             Course course = courseServiceImpl.getCourseDetailById(courseRequestUpdate.getId());
+            String urlAvt= "";
+            String urlIntro="";
             if(courseRequestUpdate.getFileAvt() != null){
                 ResponseEntity<?> resultCheckFileImage = checkFileImage(courseRequestUpdate.getFileAvt());
                 if(resultCheckFileImage != null){
                     return resultCheckFileImage;
                 }
-                String urlAvtOld = courseServiceImpl.getCourseDetailById(courseRequestUpdate.getId()).getUrlAvt();
-                int indexSlashEnd = urlAvtOld.lastIndexOf(".amazonaws.com");
-                String key = urlAvtOld.substring(indexSlashEnd + 15);
-                System.out.println("key old: "+key);
-                bucketServiceBL.removeObjectFromBucket(bucketName,key);
-                String urlAvt = bucketServiceBL.putObjectToBucket(bucketName, courseRequestUpdate.getFileAvt(),"images");
-                System.out.println("urlAvt new: "+urlAvt);
-                updatedCourseResponse = courseServiceImpl.updateCourse(courseRequestUpdate.toCourse(urlAvt,course));
-
-            }else{
-                updatedCourseResponse =courseServiceImpl.updateCourse(courseRequestUpdate.toCourse(course));
+                //delete object old
+//                String urlAvtOld = courseServiceImpl.getCourseDetailById(courseRequestUpdate.getId()).getUrlAvt();
+//                int indexSlashEnd = urlAvtOld.lastIndexOf(".amazonaws.com");
+//                String key = urlAvtOld.substring(indexSlashEnd + 15);
+//                System.out.println("key old: "+key);
+//                bucketServiceBL.removeObjectFromBucket(bucketName,key);
+                urlAvt = bucketServiceBL.putObjectToBucket(bucketName, courseRequestUpdate.getFileAvt(),"images");
             }
+            if(courseRequestUpdate.getVideoIntro() != null){
+                ResponseEntity<?> resultCheckFileImage = checkVideoIntro(courseRequestUpdate.getVideoIntro());
+                if(resultCheckFileImage != null){
+                    return resultCheckFileImage;
+                }
+                //delete object old
+//                String urlAvtOld = courseServiceImpl.getCourseDetailById(courseRequestUpdate.getId()).getUrlAvt();
+//                int indexSlashEnd = urlAvtOld.lastIndexOf(".amazonaws.com");
+//                String key = urlAvtOld.substring(indexSlashEnd + 15);
+//                System.out.println("key old: "+key);
+//                bucketServiceBL.removeObjectFromBucket(bucketName,key);
+                urlIntro = bucketServiceBL.putObjectToBucket(bucketName, courseRequestUpdate.getVideoIntro(),"videos");
+            }
+
             response.put("status","success");
             response.put("code",200);
-            response.put("data", updatedCourseResponse);
+            response.put("data", courseServiceImpl.updateCourse(courseRequestUpdate.toCourse(urlAvt,urlIntro,course)));
             return ResponseEntity.ok(response);
         }
         response.put("status","error");
@@ -86,14 +184,41 @@ public class CourseController {
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
     }
 
-    @GetMapping("/search")
-    public ResponseEntity<?> listCourses(@RequestParam(required = false) String courseName, @RequestParam(required = false) String category ,@RequestParam(required = false) String lastEvaluatedId, @RequestParam(required = false, defaultValue = "10") int pageSize) {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        Map<String, AttributeValue> lastEvaluatedKey = new HashMap<>();
-        if (lastEvaluatedId != null && !lastEvaluatedId.isEmpty()) {
-            lastEvaluatedKey.put("id", AttributeValue.builder().s(lastEvaluatedId).build());
+    @GetMapping("/search-courses-common")
+    public ResponseEntity<?> searchCoursesCommon(){
+        Map<String, Object> response = new HashMap<>();
+        List<Course> courses = courseServiceImpl.getCoursesCommon();
+        if(courses.isEmpty()){
+            return  ResponseEntity.badRequest().build();
         }
-        List<Course> courses = courseServiceImpl.getCoursesByCourseNameOrCategory(courseName,category,pageSize,lastEvaluatedKey);
+        response.put("code",200);
+        response.put("message","success");
+        response.put("data",courses);
+        return ResponseEntity.ok(response);
+    }
+    @GetMapping("/search")
+    public ResponseEntity<?> listCourses(
+            @RequestParam(required = false) String courseName,
+            @RequestParam(required = false) String category,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false, defaultValue = "10") int size,
+            @RequestParam(required = false) String sort,
+            @RequestParam(required = false) Integer rating
+    ) {
+        int currentPage = (page != null && page >= 0) ? page : 0;
+
+        // Nếu bạn có phân trang theo offset
+        int offset = currentPage * size;
+
+        // Gọi service với các thông số mới
+        List<Course> courses = courseServiceImpl.searchCourses(
+                courseName,
+                category,
+                rating,
+                sort,
+                offset,
+                size
+        );
 
         List<CourseOfStudentResponse> coursesResponse = courses.stream()
                 .map(course -> CourseOfStudentResponse.builder()
@@ -104,24 +229,24 @@ public class CourseController {
                         .teacherName(course.getTeacherName())
                         .teacherId(course.getTeacherId())
                         .totalReview(course.getTotalReview())
+                        .urlAvt(course.getUrlAvt())
+                        .category(course.getCategory())
                         .build())
                 .toList();
 
         Map<String, Object> response = new HashMap<>();
-        response.put("code",200);
-        response.put("data",coursesResponse);
+        response.put("code", 200);
+        response.put("data", coursesResponse);
         response.put("message", "success");
+
         return ResponseEntity.ok(response);
     }
+
     @PreAuthorize("hasRole('STUDENT')")
     @GetMapping("/student")
-    public ResponseEntity<?> listCoursesByStudentId(@RequestParam(required = false) String lastEvaluatedId, @RequestParam(required = false, defaultValue = "10") int pageSize) {
+    public ResponseEntity<?> listCoursesByStudentId() {
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        Map<String, AttributeValue> lastEvaluatedKey = new HashMap<>();
-        if (lastEvaluatedId != null && !lastEvaluatedId.isEmpty()) {
-            lastEvaluatedKey.put("id", AttributeValue.builder().s(lastEvaluatedId).build());
-        }
-        List<Course> courses = courseServiceImpl.getCoursesByStudentID(authentication.getName(),pageSize,lastEvaluatedKey);
+        List<Course> courses = courseServiceImpl.getCoursesByStudentID(authentication.getName());
 
         List<CourseOfStudentResponse> coursesResponse = courses.stream()
                 .map(course -> CourseOfStudentResponse.builder()
@@ -132,6 +257,8 @@ public class CourseController {
                         .teacherName(course.getTeacherName())
                         .teacherId(course.getTeacherId())
                         .totalReview(course.getTotalReview())
+                        .category(course.getCategory())
+                        .urlAvt(course.getUrlAvt())
                         .build())
                 .toList();
 
@@ -153,6 +280,7 @@ public class CourseController {
         List<CourseOfTeacherResponse> coursesResponse = new ArrayList<>();
 
         courses.forEach(course -> {
+
             CourseOfTeacherResponse courseOfStudentResponse = CourseOfTeacherResponse
                     .builder()
                     .id(course.getId())
@@ -173,6 +301,14 @@ public class CourseController {
         return ResponseEntity.ok(response);
     }
 
+    @GetMapping("/get-all-categories")
+    public ResponseEntity<?> getAllCategories(){
+        Map<String, Object> response = new HashMap<>();
+        response.put("code",200);
+        response.put("data", categoryServiceBL.getAllCategories().stream().map(Category::getCategoryName));
+        response.put("message", "success");
+        return ResponseEntity.ok(response);
+    }
     @PreAuthorize("hasAnyRole('TEACHER')")
     @PostMapping(path = "/add-course")
     public ResponseEntity<?> addCourse(@Valid CourseRequestAdd courseRequestAdd, BindingResult bindingResult) throws IOException {
@@ -186,16 +322,43 @@ public class CourseController {
         if(resultCheckFileImage != null){
             return resultCheckFileImage;
         }
+        ResponseEntity<?> resultCheckVideoIntro = checkVideoIntro(courseRequestAdd.getVideoIntro());
+        if(resultCheckVideoIntro != null){
+            return resultCheckVideoIntro;
+        }
+
 
         String urlAvt = bucketServiceBL.putObjectToBucket(bucketName, courseRequestAdd.getFileAvt(),"images");
+        String urlIntro = bucketServiceBL.putObjectToBucket(bucketName, courseRequestAdd.getVideoIntro(),"videos");
         User user = userServiceBL.getUser();
-        Course course = courseRequestAdd.covertCourseRequestAddToCourse(urlAvt, user.getUserName(),user.getId());
+        Course course = courseRequestAdd.covertCourseRequestAddToCourse(urlAvt, user.getUserName(),user.getId(),urlIntro);
         Course courseResult = courseServiceImpl.create(course);
+        categoryServiceBL.addCategory(course.getCategory());
 
         response.put("code",200);
         response.put("data",courseResult);
         response.put("message", "success");
         return ResponseEntity.ok(response);
+    }
+
+    private ResponseEntity<?> checkVideoIntro(MultipartFile file) {
+        Map<String, Object> response = new HashMap<>();
+        if(!ALLOWED_FILE_TYPES_VIDEO.contains(file.getContentType())) {
+            response.put("errors", "avt content type must be one of " + ALLOWED_FILE_TYPES_VIDEO);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+
+        }
+        if(!ALLOWED_EXTENSIONS_VIDEO.contains(getFileExtension(Objects.requireNonNull(file.getOriginalFilename())))) {
+            response.put("errors", "avt content type must be one of " + ALLOWED_EXTENSIONS_VIDEO);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+
+        }
+
+        if(file.getSize() > MAX_SIZE_VIDEO_INTRO) {
+            response.put("errors", "avt size must be less than " + MAX_SIZE_VIDEO_INTRO);
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(response);
+        }
+        return null;
     }
 
     public ResponseEntity<?> checkFileImage(MultipartFile file) {
@@ -218,11 +381,11 @@ public class CourseController {
         return null;
     }
     public String getFileExtension(String filename) {
-            int dotIndex = filename.lastIndexOf(".");
-            if (dotIndex > 0 && dotIndex < filename.length() - 1) {
-                return filename.substring(dotIndex + 1).toLowerCase();
-            }
-            return ""; // Nếu không có đuôi mở rộng
+        int dotIndex = filename.lastIndexOf(".");
+        if (dotIndex > 0 && dotIndex < filename.length() - 1) {
+            return filename.substring(dotIndex + 1).toLowerCase();
         }
+        return ""; // Nếu không có đuôi mở rộng
+    }
 
 }

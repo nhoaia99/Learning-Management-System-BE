@@ -12,6 +12,7 @@ import software.amazon.awssdk.enhanced.dynamodb.mapper.annotations.*;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Set;
 
 @Data
 @DynamoDbBean
@@ -25,7 +26,6 @@ public class Course {
     private String category;
     private String teacherId;
     private String teacherName;
-    private List<String> studentsId;
     private CourseStatus status;
     private String urlAvt;
     private float totalReview;
@@ -33,6 +33,7 @@ public class Course {
     private int countOrders;
     private int countReviews;
     private int countLectures;
+    private String urlIntro;
     @DynamoDbPartitionKey
     @DynamoDbAttribute("id")
     public String getId() {
